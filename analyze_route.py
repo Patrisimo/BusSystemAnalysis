@@ -259,7 +259,7 @@ def filter_trips(arts):
 def stop_analysis(arts, stops):
 ## I could also just identify the spots where it stops
     art_stops = []
-    speed_limit = 5
+    speed_limit = 0.1
     stupid_trips = []
     stop_euclid_locs = [ ll2euclid(stoplocations[s]['lat'], stoplocations[s]['lng']) for s in stops]
     for idx, art in enumerate(tqdm(arts, desc="finding stops")):

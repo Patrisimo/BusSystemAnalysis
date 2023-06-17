@@ -13,6 +13,7 @@ with open('stopnames.json') as file:
 def options():
     parser = ArgumentParser()
     parser.add_argument('datafile')
+    parser.add_argument('--max-stops', type=int, default=10)
 
     return parser.parse_args()
 
@@ -49,13 +50,13 @@ def intersection_label(lat, lng):
     else:
         return stopnames[closest_stop], closest_stop
 
-def print_segment_info(segment_stop_infos, eb_stops):
+def print_segment_info(segment_stop_infos, eb_stops, n_print):
     last_pair = None
     sorted_clusters = sorted(segment_stop_infos, key=lambda x: (-np.mean(x["durations"]) + np.mean(x["nonstop_durations"]))*x["count"]/x["trip_count"] )
     excess_wait = [(np.mean(x["durations"]) - np.mean(x["nonstop_durations"]))*x["count"]/x["trip_count"]  for x in sorted_clusters]
     excess_wait_pct = np.cumsum(excess_wait) / sum(excess_wait)
     print("Total expected wait: ", round(sum(excess_wait),3), 's')
-    ct = min(len(excess_wait_pct)-1, min(10, np.argmax(excess_wait_pct > 0.95)+1))
+    ct = min(len(excess_wait_pct)-1, min(n_print, np.argmax(excess_wait_pct > 0.95)+1))
     print(f"Worst {ct} stations: {round(excess_wait_pct[ct]*100,2)}% of wait")        
     for ssi in sorted_clusters[:ct]:
         stop1_name = stopnames[ssi['stop1']]
@@ -71,7 +72,8 @@ def print_segment_info(segment_stop_infos, eb_stops):
         print(f'\t\tExpected delay: {round((np.mean(ssi["durations"]) - np.mean(ssi["nonstop_durations"]))*ssi["count"]/ssi["trip_count"], 2)}s')
 
 def print_segment_analysis(segment_stop_infos, eb_stops):
-    
+    total_duration = 0
+    total_nonstop_duration = 0
     for i,stop2 in enumerate(eb_stops[1:]):
         stop1 = eb_stops[i]
         stop1_name = stopnames[stop1]
@@ -83,6 +85,13 @@ def print_segment_analysis(segment_stop_infos, eb_stops):
         print(f'\tAverage duration: {average_travel_time}')
         print(f'\tNonstop duration: {average_nonstop_travel_time}')
         print(f'\tTime lost:        {average_travel_time - average_nonstop_travel_time}')
+        if not np.isnan(average_nonstop_travel_time) and not np.isnan(average_travel_time):
+            total_duration += average_travel_time
+            total_nonstop_duration += average_nonstop_travel_time
+    print(f'Average interstation travel time: {total_duration}')
+    print(f'Average nonstop interstation travel time: {total_nonstop_duration}')
+    print(f'Average time lost: {total_duration - total_nonstop_duration}')
+    
 
 
 def print_station_analysis(clusters, eb_stops, n_buses):
@@ -92,6 +101,7 @@ def print_station_analysis(clusters, eb_stops, n_buses):
     wait_limit = durs[idx]
     # wait_allowance = durs[idx2] 
     wait_allowance = 72
+    total_station_time = 0
     for idx,stop in enumerate(eb_stops):
         stop_name = stopnames[stop]
         cluster = [c for c in clusters if c['station'] == stop]
@@ -110,8 +120,9 @@ def print_station_analysis(clusters, eb_stops, n_buses):
         # print(f'\tTime lost: ', np.mean([d - min(wait_allowance, d) for d in durs if d < wait_limit]))  
         print(f'\tProbability of stop: {round(len(durs)*100/n_buses,3)}% ({len(durs)}/{n_buses})')
         print(f'\tExpected time loss:', np.mean([d - min(wait_allowance, d) for d in durs if d < wait_limit])*len(durs)/n_buses)   
-
-def print_station_info(clusters, n_buses):
+        total_station_time += np.mean([d  for d in durs if d < wait_limit])*len(durs)/n_buses
+    print('Average time spent stopped: ', total_station_time)
+def print_station_info(clusters, n_buses, n_print):
     durs = sorted([c for cl in clusters for c in cl['durations']])
     # breakpoint()
     idx = elbow(list(enumerate(durs)))
@@ -127,7 +138,7 @@ def print_station_info(clusters, n_buses):
     excess_wait = [sum([ max(0,c-wait_allowance) for c in x['durations'] if c < wait_limit]) for x in sorted_clusters]
     excess_wait_pct = np.cumsum(excess_wait) / sum(excess_wait)
     print("Total expected excess wait: ", round(sum(excess_wait)/n_buses,3), 's')
-    ct = min(len(excess_wait_pct)-1, min(10, np.argmax(excess_wait_pct > 0.95)+1))
+    ct = min(len(excess_wait_pct)-1, min(n_print, np.argmax(excess_wait_pct > 0.95)+1))
     print(f"Worst {ct} stations: {round(excess_wait_pct[ct]*100,2)}% of wait")    
 
     for i,cluster in enumerate(sorted_clusters[:ct]):
@@ -148,23 +159,26 @@ def print_station_info(clusters, n_buses):
         # print(f'\t\t75%ile: {round(np.quantile([c for c in cluster["durations"] if c < wait_limit], 0.75)/60, 3)}')
         print()
 
-def print_stop_info(clusters, n_buses):
+def print_stop_info(clusters, n_buses, n_print):
     ds = sorted([ d for c in clusters for d in c['durations']])
     idx = elbow(list(enumerate(ds)))
     max_duration = ds[idx]
+    max_duration = 600
     sorted_clusters = sorted(clusters, key=lambda x: -sum([ c for c in x['durations'] if c < max_duration]))
     total_delay = [sum([ c for c in x['durations'] if c < max_duration]) for x in sorted_clusters]
     total_delay_pct = np.cumsum(total_delay) / sum(total_delay)
+    print("Max allowed delay: ", max_duration)
     print("Total expected delay: ", round(sum(total_delay)/n_buses,3), 's')
-    ct = min(len(total_delay_pct)-1, min(10, np.argmax(total_delay_pct > 0.95)+1))
+    ct = min(len(total_delay_pct)-1, min(n_print, np.argmax(total_delay_pct > 0.95)+1))
     print(f"Worst {ct} stops: {round(total_delay_pct[ct]*100,2)}% of delay")      
     for i,cluster in enumerate(sorted_clusters[:ct]):
         delay = sum([ c for c in cluster['durations'] if c < max_duration])
+        n_stops = cluster['counts'] # sum([ 1 for c in cluster['durations'] if c < max_duration])
         print('Cluster ', i+1, f' - {intersection_label(cluster["lat"], cluster["lng"])[0]}')
         print('\tLat/lon: ', round(cluster['lat'],8), ', ', round(cluster['lng'],8))
         # print('\tTotal delay: ', delay/60, 'min')
-        print('\tNumber of stops: ', cluster['counts'], f'({round(cluster["counts"]*100/n_buses, 2)}%)')
-        # print('\tAverage delay: ', delay / (60 * cluster['counts']), 'min')
+        print('\tNumber of stops: ', n_stops, f'({round(n_stops*100/n_buses, 2)}%)')
+        print('\tAverage delay: ', delay / ( n_stops), 's')
         print('\tExpected delay: ', delay / ( n_buses), 's')
         # print(f'\t\t25%ile: {round(np.quantile(cluster["durations"], 0.25)/60, 3)}')
         # print(f'\t\t50%ile: {round(np.quantile(cluster["durations"], 0.5)/60, 3)}')
@@ -172,15 +186,15 @@ def print_stop_info(clusters, n_buses):
         print()
 
 
-def main(filename):
+def main(filename, max_stops):
     data = np.load(filename, allow_pickle=True)
     print("East/North bound")
     print("Stops")
-    print_stop_info(data['eb_stop_info'], data['n_eb'])
+    print_stop_info(data['eb_stop_info'], data['n_eb'], max_stops)
     print("Stations")
-    print_station_info(data['eb_station_info'], data['n_eb'])
+    print_station_info(data['eb_station_info'], data['n_eb'], max_stops)
     print("Segments")
-    print_segment_info(data['eb_segment_info'], data['eb_stops'])
+    print_segment_info(data['eb_segment_info'], data['eb_stops'], max_stops)
     print("Segment analysis")
     print_segment_analysis(data['eb_segment_info'], data['eb_stops'])
     print("Station analysis")
@@ -188,11 +202,11 @@ def main(filename):
     print('--')
     print("West/South bound")
     print("Stops")
-    print_stop_info(data['wb_stop_info'], data['n_wb'])
+    print_stop_info(data['wb_stop_info'], data['n_wb'], max_stops)
     print("Stations")
-    print_station_info(data['wb_station_info'], data['n_wb'])
+    print_station_info(data['wb_station_info'], data['n_wb'], max_stops)
     print("Segments")
-    print_segment_info(data['wb_segment_info'], data['wb_stops'])
+    print_segment_info(data['wb_segment_info'], data['wb_stops'], max_stops)
     print("Segment analysis")
     print_segment_analysis(data['wb_segment_info'], data['wb_stops'])
     print("Station analysis")    
@@ -209,7 +223,7 @@ if __name__ == '__main__':
                 recent_searches[(lat,lng)] = name
     except:
         pass
-    main(ops.datafile)
+    main(ops.datafile, ops.max_stops)
     with open('recent_lookups.json', 'w') as file:
         recent_lookups = {}
         for (lat,lng),name in recent_searches.items():
